@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SocialPrepTool (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "SocialPrepTool (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
