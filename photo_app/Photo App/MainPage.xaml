@@ -203,7 +203,7 @@
 
         <!-- Preview Canvas (Center) -->
         <Grid Grid.Row="0" Grid.Column="1" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-            <skia:SKXamlCanvas x:Name="PreviewCanvas" PaintSurface="PreviewCanvas_PaintSurface" />
+            <skia:SKXamlCanvas x:Name="PreviewCanvas" PaintSurface="PreviewCanvas_PaintSurface" PointerPressed="PreviewCanvas_PointerPressed" PointerMoved="PreviewCanvas_PointerMoved" PointerReleased="PreviewCanvas_PointerReleased" PointerCanceled="PreviewCanvas_PointerReleased" PointerExited="PreviewCanvas_PointerReleased" />
 
             <!-- Info Badge (Top Right) -->
             <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12" Background="{ThemeResource SystemControlBackgroundChromeMediumBrush}" CornerRadius="6" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" Padding="8,4">
@@ -220,6 +220,22 @@
                     <TextBlock x:Name="ZoomInfoText" Text="Fit" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
+
+            <Button x:Name="SimulateSwipeButton" Visibility="{x:Bind IsCarouselMode(ViewModel.SelectedQueueItem.Record.IsCarousel), Mode=OneWay}" Content="Simulate Swipe" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16" Style="{ThemeResource AccentButtonStyle}" Click="SimulateSwipe_Click" />
+        </Grid>
+
+        <!-- Seamless Swipe Simulator Overlay -->
+        <Grid x:Name="SwipeSimulatorOverlay" Grid.RowSpan="2" Grid.ColumnSpan="3" Background="{ThemeResource SystemControlBackgroundAltHighBrush}" Visibility="Collapsed" Canvas.ZIndex="100">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Padding="16">
+                <Button Content="Close Simulator" Click="CloseSwipeSimulator_Click" Style="{ThemeResource AccentButtonStyle}"/>
+            </StackPanel>
+            <ScrollViewer Grid.Row="1" x:Name="SwipeScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="SwipeImagesPanel" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2" />
+            </ScrollViewer>
         </Grid>
 
         <!-- Preset Sidebar (Right) -->
@@ -317,7 +333,14 @@
 
                     <Border Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Height="28" VerticalAlignment="Center" />
 
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                        <ToggleSwitch Header="Carousel Mode" IsOn="{x:Bind ViewModel.SelectedQueueItem.Record.IsCarousel, Mode=TwoWay}" />
+                        <NumberBox Header="Slides" Minimum="2" Maximum="10" Value="{x:Bind ViewModel.SelectedQueueItem.Record.CarouselSlideCount, Mode=TwoWay}" Visibility="{x:Bind IsCarouselMode(ViewModel.SelectedQueueItem.Record.IsCarousel), Mode=OneWay}" Width="100" SpinButtonPlacementMode="Inline" />
+                    </StackPanel>
+
+                    <Border Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Height="28" VerticalAlignment="Center" Visibility="{x:Bind IsNotCarouselMode(ViewModel.SelectedQueueItem.Record.IsCarousel), Mode=OneWay}"/>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind IsNotCarouselMode(ViewModel.SelectedQueueItem.Record.IsCarousel), Mode=OneWay}">
                         <TextBlock Text="Background" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontWeight="SemiBold" />
                         <ComboBox SelectedItem="{x:Bind ViewModel.SelectedQueueItem.Record.BackgroundMode, Mode=TwoWay}" Width="100" CornerRadius="6">
                             <x:String>blur</x:String>
@@ -326,13 +349,13 @@
                     </StackPanel>
 
                     <!-- Blur Control (Contextual) -->
-                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind IsBlurMode(ViewModel.SelectedQueueItem.Record.BackgroundMode), Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind IsStandardBlurMode(ViewModel.SelectedQueueItem.Record.IsCarousel, ViewModel.SelectedQueueItem.Record.BackgroundMode), Mode=OneWay}">
                         <TextBlock Text="Blur Strength" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontWeight="SemiBold" />
                         <Slider Minimum="0" Maximum="100" Value="{x:Bind ViewModel.SelectedQueueItem.Record.BlurStrength, Mode=TwoWay}" Width="120" VerticalAlignment="Center" Margin="0,4,0,0" />
                     </StackPanel>
 
                     <!-- Color Control (Contextual) -->
-                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind IsSolidMode(ViewModel.SelectedQueueItem.Record.BackgroundMode), Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind IsStandardSolidMode(ViewModel.SelectedQueueItem.Record.IsCarousel, ViewModel.SelectedQueueItem.Record.BackgroundMode), Mode=OneWay}">
                         <TextBlock Text="Color" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontWeight="SemiBold" />
                         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                             <Button Style="{StaticResource ColorSwatchButtonStyle}" Click="PredefinedColor_Click" Tag="#FFFFFF" ToolTipService.ToolTip="White (#FFFFFF)">
