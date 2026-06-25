@@ -45,8 +45,18 @@ public class ExportService
             else if (record.TargetRatio == "9:16") { targetHeight = targetLongEdge; targetWidth = (int)(targetLongEdge * 9.0 / 16.0); } // 9:16
             else { targetWidth = targetLongEdge; targetHeight = (int)(targetLongEdge * 9.0 / 16.0); } // 16:9
 
+            int fullCanvasWidth = targetWidth;
+            if (record.IsCarousel)
+            {
+                fullCanvasWidth = targetWidth * record.CarouselSlideCount;
+            }
+
             Color bgColor = Color.Black;
-            if (record.BackgroundMode == "solid")
+            if (record.IsCarousel)
+            {
+                bgColor = Color.Transparent;
+            }
+            else if (record.BackgroundMode == "solid")
             {
                 if (Color.TryParse(record.BackgroundColor, out var parsed))
                 {
@@ -58,21 +68,29 @@ public class ExportService
                 bgColor = Color.Transparent; // Background drawn later
             }
 
-            using var finalOutput = new Image<Rgba32>(targetWidth, targetHeight);
+            using var finalOutput = new Image<Rgba32>(fullCanvasWidth, targetHeight);
             finalOutput.Mutate(x => x.BackgroundColor(bgColor));
 
             // Calculate foreground dimensions and position
-            float fgScale = Math.Min((float)targetWidth / sourceImage.Width, (float)targetHeight / sourceImage.Height);
+            float fgScale;
+            if (record.IsCarousel)
+            {
+                fgScale = Math.Max((float)fullCanvasWidth / sourceImage.Width, (float)targetHeight / sourceImage.Height);
+            }
+            else
+            {
+                fgScale = Math.Min((float)targetWidth / sourceImage.Width, (float)targetHeight / sourceImage.Height);
+            }
             int fgW = (int)(sourceImage.Width * fgScale);
             int fgH = (int)(sourceImage.Height * fgScale);
 
-            int offsetX = (int)((targetWidth - fgW) * record.CropAnchorX);
+            int offsetX = (int)((fullCanvasWidth - fgW) * record.CropAnchorX);
             int offsetY = (int)((targetHeight - fgH) * record.CropAnchorY);
 
             // Background Fill
             finalOutput.Mutate(ctx =>
             {
-                if (record.BackgroundMode != "solid")
+                if (!record.IsCarousel && record.BackgroundMode != "solid")
                 {
                     // Blur optimization: downscale, blur, upscale
                     using var bgImage = sourceImage.Clone(x =>
@@ -134,29 +152,71 @@ public class ExportService
             });
 
             string baseName = Path.GetFileNameWithoutExtension(originalFileName) + "_" + record.TargetRatio.Replace(":", "x");
-            string outPath = Path.Combine(destFolder, baseName + ".jpg");
-            int counter = 1;
-            FileStream fs = null;
-            while (fs == null)
+
+            var savedFiles = new List<string>();
+
+            if (record.IsCarousel)
             {
-                try
+                for (int i = 0; i < record.CarouselSlideCount; i++)
                 {
-                    fs = new FileStream(outPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                }
-                catch (IOException)
-                {
-                    outPath = Path.Combine(destFolder, $"{baseName}_{counter}.jpg");
-                    counter++;
-                    if (counter > 1000)
+                    using var slice = finalOutput.Clone(x => x.Crop(new Rectangle(i * targetWidth, 0, targetWidth, targetHeight)));
+
+                    string sliceName = $"{baseName}_slide{i + 1}.jpg";
+                    string outPath = Path.Combine(destFolder, sliceName);
+
+                    int counter = 1;
+                    FileStream fs = null;
+                    while (fs == null)
                     {
-                        throw new IOException("Could not generate a unique filename for export after 1000 attempts.");
+                        try
+                        {
+                            fs = new FileStream(outPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                        }
+                        catch (IOException)
+                        {
+                            outPath = Path.Combine(destFolder, $"{baseName}_slide{i + 1}_{counter}.jpg");
+                            counter++;
+                            if (counter > 1000)
+                            {
+                                throw new IOException("Could not generate a unique filename for export after 1000 attempts.");
+                            }
+                        }
+                    }
+
+                    using (fs)
+                    {
+                        slice.SaveAsJpeg(fs, new JpegEncoder { Quality = 92 });
+                        savedFiles.Add(Path.GetFileName(outPath));
                     }
                 }
             }
-
-            using (fs)
+            else
             {
-                finalOutput.SaveAsJpeg(fs, new JpegEncoder { Quality = 92 });
+                string outPath = Path.Combine(destFolder, baseName + ".jpg");
+                int counter = 1;
+                FileStream fs = null;
+                while (fs == null)
+                {
+                    try
+                    {
+                        fs = new FileStream(outPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    }
+                    catch (IOException)
+                    {
+                        outPath = Path.Combine(destFolder, $"{baseName}_{counter}.jpg");
+                        counter++;
+                        if (counter > 1000)
+                        {
+                            throw new IOException("Could not generate a unique filename for export after 1000 attempts.");
+                        }
+                    }
+                }
+
+                using (fs)
+                {
+                    finalOutput.SaveAsJpeg(fs, new JpegEncoder { Quality = 92 });
+                    savedFiles.Add(Path.GetFileName(outPath));
+                }
             }
 
             // Generate job log
@@ -168,16 +228,19 @@ public class ExportService
                     new
                     {
                         source = originalFileName,
-                        output = Path.GetFileName(outPath),
+                        output = savedFiles,
                         ratio = record.TargetRatio,
                         backgroundMode = record.BackgroundMode,
-                        outputResolution = $"{targetWidth}x{targetHeight}",
+                        isCarousel = record.IsCarousel,
+                        slideCount = record.CarouselSlideCount,
+                        outputResolution = $"{targetWidth}x{targetHeight} per slide",
                         warnings = new List<string>()
                     }
                 }
             };
 
-            string uniqueLogName = $"export_log_{Path.GetFileNameWithoutExtension(outPath)}.json";
+            string primaryFileName = savedFiles.Count > 0 ? savedFiles[0] : baseName;
+            string uniqueLogName = $"export_log_{Path.GetFileNameWithoutExtension(primaryFileName)}.json";
             string logPath = Path.Combine(destFolder, uniqueLogName);
             using (var logFs = new FileStream(logPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var writer = new StreamWriter(logFs))

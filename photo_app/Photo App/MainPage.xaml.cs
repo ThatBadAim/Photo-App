@@ -223,6 +223,10 @@ public sealed partial class MainPage : Page
         private Models.EditRecord? _currentSubscribedRecord;
         private bool _isLoadingBitmap = false;
 
+        // Pointer tracking for Carousel dragging
+        private bool _isDragging = false;
+        private Windows.Foundation.Point _lastPointerPosition;
+
         private async void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
             if (e.PropertyName == nameof(ViewModels.MainViewModel.SelectedQueueItem))
@@ -368,16 +372,22 @@ public sealed partial class MainPage : Page
             else if (record.TargetRatio == "9:16") { targetWidth = 1080; targetHeight = 1920; }
             else { targetWidth = 1080; targetHeight = 608; } // 16:9
 
+            int fullCanvasWidth = targetWidth;
+            if (record.IsCarousel)
+            {
+                fullCanvasWidth = targetWidth * record.CarouselSlideCount;
+            }
+
             // Calculate scale to fit canvas
-            float scale = Math.Min((float)e.Info.Width / targetWidth, (float)e.Info.Height / targetHeight);
+            float scale = Math.Min((float)e.Info.Width / fullCanvasWidth, (float)e.Info.Height / targetHeight);
 
             DispatcherQueue.TryEnqueue(() =>
             {
-                ImageInfoText.Text = $"{targetWidth} × {targetHeight}";
+                ImageInfoText.Text = $"{fullCanvasWidth} × {targetHeight}";
                 ZoomInfoText.Text = $"{(int)(scale * 100)}%";
             });
 
-            float drawWidth = targetWidth * scale;
+            float drawWidth = fullCanvasWidth * scale;
             float drawHeight = targetHeight * scale;
             float dx = (e.Info.Width - drawWidth) / 2;
             float dy = (e.Info.Height - drawHeight) / 2;
@@ -387,7 +397,7 @@ public sealed partial class MainPage : Page
             canvas.Scale(scale);
 
             // Clip to target ratio bounds
-            var targetRect = new SKRect(0, 0, targetWidth, targetHeight);
+            var targetRect = new SKRect(0, 0, fullCanvasWidth, targetHeight);
             canvas.ClipRect(targetRect);
 
             // Checkerboard
@@ -397,7 +407,7 @@ public sealed partial class MainPage : Page
                 canvas.Clear(SKColors.White);
                 for (float y = 0; y < targetHeight; y += checkerSize)
                 {
-                    for (float x = 0; x < targetWidth; x += checkerSize)
+                    for (float x = 0; x < fullCanvasWidth; x += checkerSize)
                     {
                         if (((int)(x / checkerSize) + (int)(y / checkerSize)) % 2 == 0)
                         {
@@ -408,7 +418,11 @@ public sealed partial class MainPage : Page
             }
 
             // Background
-            if (record.BackgroundMode == "solid")
+            if (record.IsCarousel)
+            {
+                canvas.Clear(SKColors.Transparent);
+            }
+            else if (record.BackgroundMode == "solid")
             {
                 if (SKColor.TryParse(record.BackgroundColor, out var color))
                 {
@@ -452,12 +466,20 @@ public sealed partial class MainPage : Page
             }
 
             // Foreground image
-            float fgScale = Math.Min((float)targetWidth / bmpWidth, (float)targetHeight / bmpHeight);
+            float fgScale;
+            if (record.IsCarousel)
+            {
+                fgScale = Math.Max((float)fullCanvasWidth / bmpWidth, (float)targetHeight / bmpHeight);
+            }
+            else
+            {
+                fgScale = Math.Min((float)targetWidth / bmpWidth, (float)targetHeight / bmpHeight);
+            }
             float fgW = bmpWidth * fgScale;
             float fgH = bmpHeight * fgScale;
 
             // Apply anchor
-            float offsetX = (targetWidth - fgW) * (float)record.CropAnchorX;
+            float offsetX = (fullCanvasWidth - fgW) * (float)record.CropAnchorX;
             float offsetY = (targetHeight - fgH) * (float)record.CropAnchorY;
 
             float fgCenterX = offsetX + fgW / 2f;
@@ -486,9 +508,211 @@ public sealed partial class MainPage : Page
             }
             canvas.Restore();
 
+            if (record.IsCarousel)
+            {
+                // Draw cut lines
+                using var cutLinePaint = new SKPaint
+                {
+                    Color = SKColors.White,
+                    StrokeWidth = 2 / scale,
+                    IsAntialias = true,
+                    Style = SKPaintStyle.Stroke,
+                    PathEffect = SKPathEffect.CreateDash(new float[] { 10 / scale, 10 / scale }, 0)
+                };
+
+                for (int i = 1; i < record.CarouselSlideCount; i++)
+                {
+                    float cutX = i * targetWidth;
+                    canvas.DrawLine(cutX, 0, cutX, targetHeight, cutLinePaint);
+                }
+
+                if (record.SafeZoneOverlay)
+                {
+                    using var safeZonePaint = new SKPaint
+                    {
+                        Color = new SKColor(255, 0, 0, 100),
+                        StrokeWidth = 4 / scale,
+                        IsAntialias = true,
+                        Style = SKPaintStyle.Stroke
+                    };
+
+                    for (int i = 0; i < record.CarouselSlideCount; i++)
+                    {
+                        float startX = i * targetWidth;
+                        // Safe zone margins (e.g., 5% width, 10% height)
+                        float marginX = targetWidth * 0.05f;
+                        float marginY = targetHeight * 0.1f;
+                        var safeRect = new SKRect(startX + marginX, marginY, startX + targetWidth - marginX, targetHeight - marginY);
+                        canvas.DrawRect(safeRect, safeZonePaint);
+                    }
+                }
+            }
+            else if (record.SafeZoneOverlay)
+            {
+                using var safeZonePaint = new SKPaint
+                {
+                    Color = new SKColor(255, 0, 0, 100),
+                    StrokeWidth = 4 / scale,
+                    IsAntialias = true,
+                    Style = SKPaintStyle.Stroke
+                };
+                float marginX = fullCanvasWidth * 0.05f;
+                float marginY = targetHeight * 0.1f;
+                var safeRect = new SKRect(marginX, marginY, fullCanvasWidth - marginX, targetHeight - marginY);
+                canvas.DrawRect(safeRect, safeZonePaint);
+            }
+
             // Hover grid and anchor dot drawing block removed
 
             canvas.Restore();
+        }
+
+        private void PreviewCanvas_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            var item = ViewModel.SelectedQueueItem;
+            if (item?.Record == null || !item.Record.IsCarousel) return;
+
+            PreviewCanvas.CapturePointer(e.Pointer);
+            _isDragging = true;
+            _lastPointerPosition = e.GetCurrentPoint(PreviewCanvas).Position;
+        }
+
+        private void PreviewCanvas_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (!_isDragging) return;
+
+            var item = ViewModel.SelectedQueueItem;
+            if (item?.Record == null || !item.Record.IsCarousel || _currentBitmap == null) return;
+
+            var currentPosition = e.GetCurrentPoint(PreviewCanvas).Position;
+            double dx = currentPosition.X - _lastPointerPosition.X;
+            double dy = currentPosition.Y - _lastPointerPosition.Y;
+
+            _lastPointerPosition = currentPosition;
+
+            var record = item.Record;
+
+            int targetWidth;
+            int targetHeight;
+            if (record.TargetRatio == "1:1") { targetWidth = 1080; targetHeight = 1080; }
+            else if (record.TargetRatio == "4:5") { targetWidth = 1080; targetHeight = 1350; }
+            else if (record.TargetRatio == "9:16") { targetWidth = 1080; targetHeight = 1920; }
+            else { targetWidth = 1080; targetHeight = 608; } // 16:9
+
+            int fullCanvasWidth = targetWidth * record.CarouselSlideCount;
+
+            float scale = Math.Min((float)PreviewCanvas.ActualWidth / fullCanvasWidth, (float)PreviewCanvas.ActualHeight / targetHeight);
+
+            float fgScale = Math.Max((float)fullCanvasWidth / _currentBitmap.Width, (float)targetHeight / _currentBitmap.Height);
+            float fgW = _currentBitmap.Width * fgScale;
+            float fgH = _currentBitmap.Height * fgScale;
+
+            // Calculate pan bounds
+            double maxPanX = fgW - fullCanvasWidth;
+            double maxPanY = fgH - targetHeight;
+
+            if (maxPanX > 0)
+            {
+                // Translate pixel delta to anchor delta (0 to 1)
+                // Note: dragging right (positive dx) means we are shifting the image right, which means crop anchor moves left (smaller)
+                double anchorDeltaX = - (dx / scale) / maxPanX;
+                record.CropAnchorX = Math.Clamp(record.CropAnchorX + anchorDeltaX, 0, 1);
+            }
+
+            if (maxPanY > 0)
+            {
+                double anchorDeltaY = - (dy / scale) / maxPanY;
+                record.CropAnchorY = Math.Clamp(record.CropAnchorY + anchorDeltaY, 0, 1);
+            }
+        }
+
+        private void PreviewCanvas_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (_isDragging)
+            {
+                _isDragging = false;
+                PreviewCanvas.ReleasePointerCapture(e.Pointer);
+            }
+        }
+
+        private async void SimulateSwipe_Click(object sender, RoutedEventArgs e)
+        {
+            var item = ViewModel.SelectedQueueItem;
+            if (item?.Record == null || !item.Record.IsCarousel || _currentBitmap == null) return;
+
+            var record = item.Record;
+
+            int targetWidth;
+            int targetHeight;
+            if (record.TargetRatio == "1:1") { targetWidth = 1080; targetHeight = 1080; }
+            else if (record.TargetRatio == "4:5") { targetWidth = 1080; targetHeight = 1350; }
+            else if (record.TargetRatio == "9:16") { targetWidth = 1080; targetHeight = 1920; }
+            else { targetWidth = 1080; targetHeight = 608; } // 16:9
+
+            int fullCanvasWidth = targetWidth * record.CarouselSlideCount;
+
+            // Render full strip
+            using var stripSurface = SKSurface.Create(new SKImageInfo(fullCanvasWidth, targetHeight));
+            var canvas = stripSurface.Canvas;
+            canvas.Clear(SKColors.Transparent);
+
+            float fgScale = Math.Max((float)fullCanvasWidth / _currentBitmap.Width, (float)targetHeight / _currentBitmap.Height);
+            float fgW = _currentBitmap.Width * fgScale;
+            float fgH = _currentBitmap.Height * fgScale;
+
+            float offsetX = (fullCanvasWidth - fgW) * (float)record.CropAnchorX;
+            float offsetY = (targetHeight - fgH) * (float)record.CropAnchorY;
+
+            float fgCenterX = offsetX + fgW / 2f;
+            float fgCenterY = offsetY + fgH / 2f;
+
+            float unrotatedFgW = _currentBitmap.Width * fgScale;
+            float unrotatedFgH = _currentBitmap.Height * fgScale;
+            var fgRect = new SKRect(fgCenterX - unrotatedFgW / 2, fgCenterY - unrotatedFgH / 2, fgCenterX + unrotatedFgW / 2, fgCenterY + unrotatedFgH / 2);
+
+            canvas.Save();
+            if (record.ManualRotationDegrees != 0)
+            {
+                canvas.RotateDegrees(record.ManualRotationDegrees, fgCenterX, fgCenterY);
+            }
+            canvas.DrawBitmap(_currentBitmap, fgRect);
+            canvas.Restore();
+
+            using var fullStripImage = stripSurface.Snapshot();
+
+            SwipeImagesPanel.Children.Clear();
+
+            // Slice and add to panel
+            for (int i = 0; i < record.CarouselSlideCount; i++)
+            {
+                using var sliceImage = fullStripImage.Subset(new SKRectI(i * targetWidth, 0, (i + 1) * targetWidth, targetHeight));
+                using var sliceData = sliceImage.Encode(SKEncodedImageFormat.Jpeg, 90);
+
+                using var stream = new System.IO.MemoryStream();
+                sliceData.SaveTo(stream);
+                stream.Position = 0;
+
+                var bitMapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                await bitMapImage.SetSourceAsync(stream.AsRandomAccessStream());
+
+                var imageControl = new Microsoft.UI.Xaml.Controls.Image
+                {
+                    Source = bitMapImage,
+                    Width = targetWidth * 0.4, // Scale down for preview
+                    Height = targetHeight * 0.4,
+                    Margin = new Thickness(0, 0, 4, 0)
+                };
+
+                SwipeImagesPanel.Children.Add(imageControl);
+            }
+
+            SwipeSimulatorOverlay.Visibility = Visibility.Visible;
+        }
+
+        private void CloseSwipeSimulator_Click(object sender, RoutedEventArgs e)
+        {
+            SwipeSimulatorOverlay.Visibility = Visibility.Collapsed;
+            SwipeImagesPanel.Children.Clear();
         }
 
         private void PredefinedColor_Click(object sender, RoutedEventArgs e)
@@ -503,6 +727,11 @@ public sealed partial class MainPage : Page
         public Visibility IsBlurMode(string mode) => mode == "blur" ? Visibility.Visible : Visibility.Collapsed;
         public Visibility IsSolidMode(string mode) => mode == "solid" ? Visibility.Visible : Visibility.Collapsed;
         public Visibility IsEmpty(int count) => count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        public Visibility IsCarouselMode(bool isCarousel) => isCarousel ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility IsNotCarouselMode(bool isCarousel) => !isCarousel ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility IsStandardBlurMode(bool isCarousel, string mode) => (!isCarousel && mode == "blur") ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility IsStandardSolidMode(bool isCarousel, string mode) => (!isCarousel && mode == "solid") ? Visibility.Visible : Visibility.Collapsed;
 
         public Visibility IsProcessing(ViewModels.QueueItemStatus status) => status == ViewModels.QueueItemStatus.Processing ? Visibility.Visible : Visibility.Collapsed;
         public Visibility IsDone(ViewModels.QueueItemStatus status) => status == ViewModels.QueueItemStatus.Done ? Visibility.Visible : Visibility.Collapsed;

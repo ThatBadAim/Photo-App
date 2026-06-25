@@ -172,6 +172,8 @@ public partial class MainViewModel : ObservableObject
                 item.Record.BlurStrength = r.BlurStrength;
                 item.Record.DropShadow = r.DropShadow;
                 item.Record.SafeZoneOverlay = r.SafeZoneOverlay;
+                item.Record.IsCarousel = r.IsCarousel;
+                item.Record.CarouselSlideCount = r.CarouselSlideCount;
             }
         }
     }

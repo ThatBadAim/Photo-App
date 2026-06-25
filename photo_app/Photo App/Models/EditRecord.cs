@@ -35,6 +35,12 @@ public partial class EditRecord : ObservableObject
     [ObservableProperty]
     private bool _safeZoneOverlay = false;
 
+    [ObservableProperty]
+    private bool _isCarousel = false;
+
+    [ObservableProperty]
+    private int _carouselSlideCount = 3;
+
     public EditRecord Clone()
     {
         return new EditRecord
@@ -48,7 +54,9 @@ public partial class EditRecord : ObservableObject
             BackgroundColor = this.BackgroundColor,
             BlurStrength = this.BlurStrength,
             DropShadow = this.DropShadow,
-            SafeZoneOverlay = this.SafeZoneOverlay
+            SafeZoneOverlay = this.SafeZoneOverlay,
+            IsCarousel = this.IsCarousel,
+            CarouselSlideCount = this.CarouselSlideCount
         };
     }
 }
